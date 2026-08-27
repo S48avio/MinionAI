@@ -78,7 +78,12 @@ Start the FastAPI backend from the project root:
 uv run uvicorn backend.main:app --reload
 ```
 
-The backend runs at `http://127.0.0.1:8000`. Interactive API documentation is available at `http://127.0.0.1:8000/docs`.
+The backend runs at `http://127.0.0.1:8000`. The APIs have separate interactive documentation while running in the same FastAPI/Uvicorn process:
+
+- Chat API: `http://127.0.0.1:8000/docs`
+- RAG API: `http://127.0.0.1:8000/rag/docs`
+
+The RAG routes are available under `/rag`, including `/rag/upload`, `/rag/search`, `/rag/documents`, and `/rag/health`.
 
 In a second terminal, start the frontend:
 

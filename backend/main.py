@@ -8,6 +8,8 @@ from pydantic import BaseModel
 from openai import OpenAI
 from langfuse import Langfuse
 
+from backend.rag import app as rag_app
+
 load_dotenv()
 
 app = FastAPI()
@@ -19,6 +21,10 @@ app.add_middleware(
     allow_methods=["POST"],
     allow_headers=["Content-Type"],
 )
+
+# Keep the RAG API and its OpenAPI schema separate while serving it from the
+# same Uvicorn process. Its Swagger UI is available at /rag/docs.
+app.mount("/rag", rag_app)
 
 # --------------------------
 # LiteLLM Proxy Client

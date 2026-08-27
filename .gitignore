@@ -18,6 +18,9 @@ build/
 dist/
 *.egg-info/
 
+# Local Chroma vector database
+backend/chroma_data/
+
 # Node and Vite
 node_modules/
 frontend/dist/
