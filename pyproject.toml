@@ -15,4 +15,5 @@ dependencies = [
     "python-multipart>=0.0.32",
     "sentence-transformers>=6.0.0",
     "uvicorn[standard]>=0.52.4",
+    "valkey>=6.1.1",
 ]

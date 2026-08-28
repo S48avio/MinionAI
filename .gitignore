@@ -21,6 +21,9 @@ dist/
 # Local Chroma vector database
 backend/chroma_data/
 
+# Runtime application logs
+backend/logs/*.log*
+
 # Node and Vite
 node_modules/
 frontend/dist/

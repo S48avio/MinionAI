@@ -3,15 +3,42 @@ from uuid import uuid4
 
 import chromadb
 import pymupdf
-from fastapi import FastAPI, File, HTTPException, UploadFile
-from pydantic import BaseModel, Field
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from sentence_transformers import SentenceTransformer
 
+from config import get_logger
+from schemas.models import SearchRequest
+
+
+logger = get_logger(__name__)
 
 app = FastAPI(
     title="Persistent Chroma RAG Service",
     description="Upload, search, list, and delete PDF documents.",
 )
+
+
+@app.middleware("http")
+async def log_rag_requests(request: Request, call_next):
+    logger.info("RAG request started: method=%s path=%s", request.method, request.url.path)
+
+    try:
+        response = await call_next(request)
+    except Exception:
+        logger.exception(
+            "Unhandled RAG request failure: method=%s path=%s",
+            request.method,
+            request.url.path,
+        )
+        raise
+
+    logger.info(
+        "RAG request completed: method=%s path=%s status=%d",
+        request.method,
+        request.url.path,
+        response.status_code,
+    )
+    return response
 
 # ---------------------------------------------------------
 # Configuration
@@ -45,15 +72,11 @@ collection = chroma_client.get_or_create_collection(
         "hnsw:space": "cosine"
     }
 )
-
-
-# ---------------------------------------------------------
-# Request models
-# ---------------------------------------------------------
-
-class SearchRequest(BaseModel):
-    query: str = Field(min_length=1)
-    top_k: int = Field(default=5, ge=1, le=20)
+logger.info(
+    "RAG collection initialized: collection=%s vectors=%d",
+    COLLECTION_NAME,
+    collection.count(),
+)
 
 
 # ---------------------------------------------------------
@@ -169,8 +192,10 @@ async def upload_pdf(
     file: UploadFile = File(...)
 ):
     filename = file.filename or "uploaded.pdf"
+    logger.info("PDF upload started")
 
     if file.content_type != "application/pdf":
+        logger.warning("PDF upload rejected because of invalid content type")
         raise HTTPException(
             status_code=400,
             detail="Only PDF files are supported"
@@ -179,18 +204,21 @@ async def upload_pdf(
     file_bytes = await file.read()
 
     if not file_bytes:
+        logger.warning("PDF upload rejected because the file was empty")
         raise HTTPException(
             status_code=400,
             detail="Uploaded PDF is empty"
         )
 
     if len(file_bytes) > MAX_FILE_SIZE:
+        logger.warning("PDF upload rejected because it exceeded the size limit")
         raise HTTPException(
             status_code=413,
             detail="PDF exceeds the 20 MB upload limit"
         )
 
     if not file_bytes.startswith(b"%PDF"):
+        logger.warning("PDF upload rejected because its signature was invalid")
         raise HTTPException(
             status_code=400,
             detail="Uploaded file does not appear to be a valid PDF"
@@ -199,12 +227,14 @@ async def upload_pdf(
     try:
         pages = extract_pdf_pages(file_bytes)
     except ValueError as exc:
+        logger.warning("PDF upload rejected during parsing: %s", exc)
         raise HTTPException(
             status_code=400,
             detail=str(exc)
         ) from exc
 
     if not pages:
+        logger.warning("PDF upload contained no extractable text")
         raise HTTPException(
             status_code=400,
             detail=(
@@ -222,6 +252,7 @@ async def upload_pdf(
     )
 
     if not documents:
+        logger.warning("PDF upload produced no usable chunks")
         raise HTTPException(
             status_code=400,
             detail="No usable text chunks were created"
@@ -242,10 +273,18 @@ async def upload_pdf(
             metadatas=metadatas
         )
     except Exception as exc:
+        logger.exception("Failed to save PDF embeddings")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to save embeddings: {exc}"
         ) from exc
+
+    logger.info(
+        "PDF upload completed: document_id=%s pages=%d chunks=%d",
+        document_id,
+        len(pages),
+        len(documents),
+    )
 
     return {
         "message": "PDF embedded successfully",
@@ -263,6 +302,7 @@ async def upload_pdf(
 
 @app.post("/search")
 def search_documents(request: SearchRequest):
+    logger.info("RAG search started with top_k=%d", request.top_k)
     query_embedding = embedding_model.encode(
         [request.query],
         normalize_embeddings=True,
@@ -272,6 +312,7 @@ def search_documents(request: SearchRequest):
     available_chunks = collection.count()
 
     if available_chunks == 0:
+        logger.warning("RAG search requested while the collection was empty")
         raise HTTPException(
             status_code=404,
             detail="No documents have been uploaded"
@@ -309,6 +350,8 @@ def search_documents(request: SearchRequest):
             }
         )
 
+    logger.info("RAG search completed with %d matches", len(matches))
+
     return {
         "query": request.query,
         "matches": matches
@@ -339,6 +382,8 @@ def list_documents():
 
         documents[document_id]["chunks"] += 1
 
+    logger.info("Listed %d RAG documents", len(documents))
+
     return {
         "documents": list(documents.values()),
         "total_vectors": collection.count()
@@ -351,6 +396,7 @@ def list_documents():
 
 @app.delete("/documents/{document_id}")
 def delete_document(document_id: str):
+    logger.info("RAG document deletion requested: document_id=%s", document_id)
     existing = collection.get(
         where={
             "document_id": document_id
@@ -359,6 +405,7 @@ def delete_document(document_id: str):
     )
 
     if not existing["ids"]:
+        logger.warning("RAG document was not found: document_id=%s", document_id)
         raise HTTPException(
             status_code=404,
             detail="Document not found"
@@ -368,6 +415,12 @@ def delete_document(document_id: str):
         where={
             "document_id": document_id
         }
+    )
+
+    logger.info(
+        "RAG document deleted: document_id=%s chunks=%d",
+        document_id,
+        len(existing["ids"]),
     )
 
     return {
@@ -380,6 +433,7 @@ def delete_document(document_id: str):
 
 @app.get("/health")
 def health():
+    logger.info("RAG health check requested")
     return {
         "status": "healthy",
         "collection": COLLECTION_NAME,
